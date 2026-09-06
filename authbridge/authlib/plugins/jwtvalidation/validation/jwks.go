@@ -2,19 +2,23 @@ package validation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jwt"
+	"github.com/rossoctl/cortex/authbridge/authlib/redact"
 )
 
 // JWKSVerifier validates JWTs using a JWKS endpoint with auto-refreshing key cache.
 type JWKSVerifier struct {
-	jwksURL string
-	issuer  string
-	cache   *jwk.Cache
+	jwksURL        string
+	issuer         string
+	cache          *jwk.Cache
+	debugLogClaims bool
 }
 
 // JWKSOption configures JWKSVerifier behavior.
@@ -22,11 +26,21 @@ type JWKSOption func(*jwksConfig)
 
 type jwksConfig struct {
 	refreshInterval time.Duration
+	debugLogClaims  bool
 }
 
 // WithRefreshInterval sets the JWKS cache refresh interval.
 func WithRefreshInterval(d time.Duration) JWKSOption {
 	return func(c *jwksConfig) { c.refreshInterval = d }
+}
+
+// WithDebugLogClaims enables Debug-level logging of every token's full
+// decoded claim set (registered + private) on every Verify call, success or
+// failure-by-audience-mismatch. Dev / incident-response only — the logged
+// claims are PII (email, name, preferred_username, etc.); never enable on a
+// shared or production cluster. Off by default.
+func WithDebugLogClaims(enabled bool) JWKSOption {
+	return func(c *jwksConfig) { c.debugLogClaims = enabled }
 }
 
 // NewJWKSVerifier creates a Verifier that validates JWTs against a JWKS endpoint.
@@ -48,9 +62,10 @@ func NewJWKSVerifier(ctx context.Context, jwksURL, issuer string, opts ...JWKSOp
 	}
 
 	return &JWKSVerifier{
-		jwksURL: jwksURL,
-		issuer:  issuer,
-		cache:   cache,
+		jwksURL:        jwksURL,
+		issuer:         issuer,
+		cache:          cache,
+		debugLogClaims: cfg.debugLogClaims,
 	}, nil
 }
 
@@ -78,11 +93,6 @@ func (v *JWKSVerifier) Verify(ctx context.Context, tokenStr string, audiences []
 	token, err := jwt.Parse([]byte(tokenStr), parseOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("validating JWT: %w", err)
-	}
-
-	// Manually validate audience: token must contain at least one expected audience
-	if !audienceMatches(token.Audience(), audiences) {
-		return nil, fmt.Errorf("validating JWT: none of expected audiences %v found in token audiences %v", audiences, token.Audience())
 	}
 
 	claims := &Claims{
@@ -114,7 +124,43 @@ func (v *JWKSVerifier) Verify(ctx context.Context, tokenStr string, audiences []
 		}
 	}
 
+	// Built before the audience check (not after) so debug logging sees the
+	// full decoded claim set on the audience-mismatch error path too — that
+	// is exactly the case an operator most needs to see "what did the token
+	// actually contain" for.
+	if v.debugLogClaims {
+		logDecodedClaims(claims)
+	}
+
+	// Manually validate audience: token must contain at least one expected audience
+	if !audienceMatches(claims.Audience, audiences) {
+		return nil, fmt.Errorf("validating JWT: none of expected audiences %v found in token audiences %v", audiences, claims.Audience)
+	}
+
 	return claims, nil
+}
+
+// logDecodedClaims emits the full decoded claim set (registered + Extra) at
+// Debug level, run through redact.JSON as defense-in-depth. Gated behind
+// JWKSVerifier.debugLogClaims — see WithDebugLogClaims.
+func logDecodedClaims(claims *Claims) {
+	dump := map[string]any{
+		"sub":   claims.Subject,
+		"iss":   claims.Issuer,
+		"aud":   claims.Audience,
+		"azp":   claims.ClientID,
+		"scope": claims.Scopes,
+		"exp":   claims.ExpiresAt,
+	}
+	for k, val := range claims.Extra {
+		dump[k] = val
+	}
+	raw, err := json.Marshal(dump)
+	if err != nil {
+		slog.Debug("jwt-validation: decoded token claims (marshal failed)", "error", err)
+		return
+	}
+	slog.Debug("jwt-validation: decoded token claims", "claims", json.RawMessage(redact.JSON(raw)))
 }
 
 // audienceMatches checks if any of the expected audiences is present in the token's audience claim.

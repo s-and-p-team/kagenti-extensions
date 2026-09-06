@@ -2,6 +2,7 @@ package redact
 
 import (
 	"encoding/json"
+	"net/http"
 	"testing"
 )
 
@@ -128,6 +129,66 @@ func TestJSON_RedactsApiKey(t *testing.T) {
 	}
 	if m["endpoint"] != "https://api" {
 		t.Errorf("endpoint = %v, want https://api", m["endpoint"])
+	}
+}
+
+func TestHeaders_RedactsAuthorization(t *testing.T) {
+	h := http.Header{}
+	h.Set("Authorization", "Bearer eyJ...secret")
+	h.Set("Content-Type", "application/json")
+	out := Headers(h)
+	if out["Authorization"] != "[REDACTED]" {
+		t.Errorf("Authorization = %v, want [REDACTED]", out["Authorization"])
+	}
+	if out["Content-Type"] != "application/json" {
+		t.Errorf("Content-Type = %v, want application/json", out["Content-Type"])
+	}
+}
+
+func TestHeaders_RedactsCookie(t *testing.T) {
+	h := http.Header{}
+	h.Set("Cookie", "session=abc123")
+	h.Set("Set-Cookie", "session=abc123; Path=/")
+	h.Set("Host", "example.com")
+	out := Headers(h)
+	if out["Cookie"] != "[REDACTED]" {
+		t.Errorf("Cookie = %v, want [REDACTED]", out["Cookie"])
+	}
+	if out["Set-Cookie"] != "[REDACTED]" {
+		t.Errorf("Set-Cookie = %v, want [REDACTED]", out["Set-Cookie"])
+	}
+	if out["Host"] != "example.com" {
+		t.Errorf("Host = %v, want example.com", out["Host"])
+	}
+}
+
+func TestHeaders_RedactsSensitiveKeySuffixMatch(t *testing.T) {
+	h := http.Header{}
+	h.Set("X-Api-Token", "sekret")
+	h.Set("X-Request-Id", "abc-123")
+	out := Headers(h)
+	if out["X-Api-Token"] != "[REDACTED]" {
+		t.Errorf("X-Api-Token = %v, want [REDACTED]", out["X-Api-Token"])
+	}
+	if out["X-Request-Id"] != "abc-123" {
+		t.Errorf("X-Request-Id = %v, want abc-123", out["X-Request-Id"])
+	}
+}
+
+func TestHeaders_MultiValueJoined(t *testing.T) {
+	h := http.Header{}
+	h.Add("Accept", "text/html")
+	h.Add("Accept", "application/json")
+	out := Headers(h)
+	if out["Accept"] != "text/html, application/json" {
+		t.Errorf("Accept = %q, want %q", out["Accept"], "text/html, application/json")
+	}
+}
+
+func TestHeaders_Empty(t *testing.T) {
+	out := Headers(http.Header{})
+	if len(out) != 0 {
+		t.Errorf("Headers(empty) = %v, want empty map", out)
 	}
 }
 

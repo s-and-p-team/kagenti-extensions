@@ -77,6 +77,48 @@ func TestPipelineRun_Sequential(t *testing.T) {
 	}
 }
 
+// TestPipelineRun_DebugPluginInput_NoIdentity confirms WithDebugPluginInput
+// is a pure observability add-on: same Continue result, no panic, when no
+// auth plugin has run yet (pctx.Identity is nil).
+func TestPipelineRun_DebugPluginInput_NoIdentity(t *testing.T) {
+	p1 := &stubPlugin{name: "first"}
+	pipe, err := New([]Plugin{p1}, WithDebugPluginInput(true))
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	pctx := &Context{Headers: map[string][]string{"Authorization": {"Bearer secret"}}}
+	action := pipe.Run(context.Background(), pctx)
+	if action.Type != Continue {
+		t.Errorf("got %v, want Continue", action.Type)
+	}
+}
+
+// TestPipelineRun_DebugPluginInput_WithIdentity exercises the identity
+// branch of logPluginInput (pctx.Identity set by an earlier plugin) without
+// panicking, and confirms behavior is unchanged from the non-debug path.
+func TestPipelineRun_DebugPluginInput_WithIdentity(t *testing.T) {
+	p1 := &stubPlugin{
+		name: "auth",
+		onReq: func(_ context.Context, pctx *Context) Action {
+			pctx.Identity = stubIdentity{subject: "dev-user", clientID: "aiac-demo-cli", scopes: []string{"openid"}}
+			return Action{Type: Continue}
+		},
+	}
+	p2 := &stubPlugin{name: "downstream"}
+	pipe, err := New([]Plugin{p1, p2}, WithDebugPluginInput(true))
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	pctx := &Context{}
+	action := pipe.Run(context.Background(), pctx)
+	if action.Type != Continue {
+		t.Errorf("got %v, want Continue", action.Type)
+	}
+	if pctx.Identity == nil || pctx.Identity.Subject() != "dev-user" {
+		t.Errorf("identity not propagated as expected: %+v", pctx.Identity)
+	}
+}
+
 func TestPipelineRun_Reject(t *testing.T) {
 	called := false
 	p1 := &stubPlugin{

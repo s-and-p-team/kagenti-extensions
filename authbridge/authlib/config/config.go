@@ -41,6 +41,24 @@ type Config struct {
 	// TLSBridge, when non-nil and Enabled, terminates agent outbound TLS so the
 	// outbound pipeline sees decrypted HTTPS. See docs/.../tlsbridge-design.md.
 	TLSBridge *TLSBridgeConfig `yaml:"tls_bridge,omitempty" json:"tls_bridge,omitempty"`
+	// Debug, when non-nil, enables opt-in diagnostic logging — see
+	// DebugConfig. Pointer so an absent block is the default (off).
+	Debug *DebugConfig `yaml:"debug,omitempty" json:"debug,omitempty"`
+}
+
+// DebugConfig enables verbose, opt-in diagnostic logging for tracing auth
+// decisions during development / incident response. Every field defaults to
+// false. NEVER enable on a shared or production cluster: LogPluginInput logs
+// a redacted pipeline.Context snapshot — including any Identity a plugin has
+// already established (subject, client ID, scopes, curated claims) — at
+// Debug level before every plugin invocation, on every request. Restart-only
+// (read once at pipeline build time, same as listener.* fields), not
+// hot-reloadable via authlib/reloader.
+type DebugConfig struct {
+	// LogPluginInput logs one Debug-level line per plugin per request,
+	// showing what pipeline.Context looked like immediately before that
+	// plugin ran. See pipeline.WithDebugPluginInput.
+	LogPluginInput bool `yaml:"log_plugin_input" json:"log_plugin_input"`
 }
 
 // TLSBridgeConfig configures the outbound TLS bridge (TLS termination of

@@ -288,6 +288,69 @@ func TestJWKSVerifier_MultiExpectedAudiences_OneMatches(t *testing.T) {
 	}
 }
 
+// TestJWKSVerifier_DebugLogClaims_ValidToken_SameBehavior confirms
+// WithDebugLogClaims(true) is a pure observability add-on: same claims,
+// same nil error as the default verifier on a valid token.
+func TestJWKSVerifier_DebugLogClaims_ValidToken_SameBehavior(t *testing.T) {
+	privKey, jwksSrv := setupTestJWKS(t)
+	defer jwksSrv.Close()
+
+	ctx := context.Background()
+	v, err := NewJWKSVerifier(ctx, jwksSrv.URL, "http://test-issuer", WithDebugLogClaims(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	token := signToken(t, privKey, map[string]interface{}{
+		"iss":          "http://test-issuer",
+		"aud":          []string{"my-agent"},
+		"sub":          "user-123",
+		"azp":          "caller-app",
+		"realm_access": map[string]interface{}{"roles": []string{"developer"}},
+		"exp":          time.Now().Add(5 * time.Minute).Unix(),
+		"iat":          time.Now().Unix(),
+	})
+
+	claims, err := v.Verify(ctx, token, []string{"my-agent"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if claims.Subject != "user-123" {
+		t.Errorf("subject = %q, want user-123", claims.Subject)
+	}
+	if claims.ClientID != "caller-app" {
+		t.Errorf("client_id = %q, want caller-app", claims.ClientID)
+	}
+	if _, ok := claims.Extra["realm_access"]; !ok {
+		t.Error("expected realm_access to survive in Extra with debug logging enabled")
+	}
+}
+
+// TestJWKSVerifier_DebugLogClaims_AudienceMismatch_SameError confirms
+// WithDebugLogClaims(true) doesn't change the audience-mismatch error path —
+// this is exactly the branch a "why did the token get rejected" debugging
+// session needs the claim dump on, so it must still return the same error.
+func TestJWKSVerifier_DebugLogClaims_AudienceMismatch_SameError(t *testing.T) {
+	privKey, jwksSrv := setupTestJWKS(t)
+	defer jwksSrv.Close()
+
+	ctx := context.Background()
+	v, _ := NewJWKSVerifier(ctx, jwksSrv.URL, "http://test-issuer", WithDebugLogClaims(true))
+
+	token := signToken(t, privKey, map[string]interface{}{
+		"iss": "http://test-issuer",
+		"aud": []string{"other-agent"},
+		"sub": "user",
+		"exp": time.Now().Add(5 * time.Minute).Unix(),
+		"iat": time.Now().Unix(),
+	})
+
+	_, err := v.Verify(ctx, token, []string{"my-agent"})
+	if err == nil {
+		t.Fatal("expected error for wrong audience even with debug logging enabled")
+	}
+}
+
 func TestJWKSVerifier_MultiExpectedAudiences_NoneMatch(t *testing.T) {
 	privKey, jwksSrv := setupTestJWKS(t)
 	defer jwksSrv.Close()

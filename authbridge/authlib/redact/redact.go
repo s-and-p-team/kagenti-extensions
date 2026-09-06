@@ -6,11 +6,23 @@ package redact
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 )
 
 var sensitiveKeys = []string{
 	"secret", "password", "token", "bearer", "key", "credential",
+}
+
+// sensitiveHeaders names HTTP headers worth hiding in a header dump whose
+// names don't end in any of isSensitiveKey's suffixes — "authorization" and
+// "cookie" carry the actual bearer credential / session but match none of
+// secret/password/token/bearer/key/credential as a suffix.
+var sensitiveHeaders = map[string]bool{
+	"authorization": true,
+	"cookie":        true,
+	"set-cookie":    true,
+	"x-api-key":     true,
 }
 
 // JSON redacts values whose keys match sensitive patterns in a
@@ -70,4 +82,23 @@ func isSensitiveKey(key string) bool {
 		}
 	}
 	return false
+}
+
+// Headers returns a flattened, redacted copy of h for logging: one string
+// per header name (multi-value headers joined with ", "), with sensitive
+// header values (sensitiveHeaders, plus isSensitiveKey as defense-in-depth
+// for any header whose name happens to match those suffixes) replaced by
+// "[REDACTED]". Debug-tooling helper — see authlib/pipeline's plugin-input
+// logging — not used on any request-processing hot path today.
+func Headers(h http.Header) map[string]string {
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		lower := strings.ToLower(k)
+		if sensitiveHeaders[lower] || isSensitiveKey(k) {
+			out[k] = "[REDACTED]"
+			continue
+		}
+		out[k] = strings.Join(v, ", ")
+	}
+	return out
 }

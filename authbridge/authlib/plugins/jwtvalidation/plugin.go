@@ -104,6 +104,13 @@ type jwtValidationConfig struct {
 
 	PlaceholderMode bool   `json:"placeholder_mode" default:"false" description:"After validating the inbound token, replace it with an opaque placeholder before forwarding to the agent; the real token is held in the shared store for the outbound path to resolve. Requires a shared store and token-exchange resolve_placeholders downstream."`
 	PlaceholderTTL  string `json:"placeholder_ttl" default:"1h" description:"How long the real token is retained for outbound resolution (Go duration, e.g. 30m). Default 1h."`
+
+	// DebugLogClaims logs every token's full decoded claim set (registered +
+	// private, e.g. sub/realm_access/preferred_username) at Debug level on
+	// every Verify call — success or audience-mismatch failure. Dev /
+	// incident-response only: the logged claims are PII. Never enable on a
+	// shared or production cluster.
+	DebugLogClaims bool `json:"debug_log_claims" default:"false" description:"Log full decoded token claims at Debug level. Dev/incident-response only — never enable on a shared cluster (logs PII)."`
 }
 
 func (c *jwtValidationConfig) applyDefaults() {
@@ -291,7 +298,7 @@ func (p *JWTValidation) Configure(raw json.RawMessage) error {
 	if err != nil {
 		return fmt.Errorf("jwt-validation bypass patterns: %w", err)
 	}
-	verifier := validation.NewLazyJWKSVerifier(c.JWKSURL, c.Issuer)
+	verifier := validation.NewLazyJWKSVerifier(c.JWKSURL, c.Issuer, validation.WithDebugLogClaims(c.DebugLogClaims))
 	p.inner = auth.New(auth.Config{
 		Verifier: verifier,
 		Bypass:   matcher,

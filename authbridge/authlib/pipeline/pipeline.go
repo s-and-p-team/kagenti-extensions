@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/rossoctl/cortex/authbridge/authlib/contracts"
+	"github.com/rossoctl/cortex/authbridge/authlib/redact"
 )
 
 // DefaultFinishTimeout bounds how long each plugin's OnFinish may run.
@@ -26,6 +29,7 @@ type Pipeline struct {
 	plugins       []Plugin
 	policies      []ErrorPolicy
 	finishTimeout time.Duration
+	debugLogInput bool
 }
 
 // Option configures pipeline construction.
@@ -34,6 +38,7 @@ type Option func(*options)
 type options struct {
 	policies      []ErrorPolicy
 	finishTimeout time.Duration
+	debugLogInput bool
 }
 
 // WithFinishTimeout overrides the per-plugin OnFinish timeout. Each
@@ -45,6 +50,20 @@ type options struct {
 func WithFinishTimeout(d time.Duration) Option {
 	return func(o *options) {
 		o.finishTimeout = d
+	}
+}
+
+// WithDebugPluginInput enables Debug-level logging of a redacted
+// pipeline.Context snapshot immediately before every plugin's OnRequest
+// runs — direction/method/path/host, redacted headers, and (once an auth
+// plugin has run) the established Identity. Dev / incident-response only:
+// on a request with an authenticated Identity this logs subject/client-ID/
+// scopes and any curated ClaimsCarrier claims on every request, to every
+// plugin's log line. Off by default; never enable on a shared or
+// production cluster.
+func WithDebugPluginInput(enabled bool) Option {
+	return func(o *options) {
+		o.debugLogInput = enabled
 	}
 }
 
@@ -78,7 +97,7 @@ func New(plugins []Plugin, opts ...Option) (*Pipeline, error) {
 	if finishTimeout <= 0 {
 		finishTimeout = DefaultFinishTimeout
 	}
-	return &Pipeline{plugins: plugins, policies: policies, finishTimeout: finishTimeout}, nil
+	return &Pipeline{plugins: plugins, policies: policies, finishTimeout: finishTimeout, debugLogInput: o.debugLogInput}, nil
 }
 
 // Run executes the request phase of the pipeline sequentially.
@@ -113,6 +132,9 @@ func (p *Pipeline) Run(ctx context.Context, pctx *Context) Action {
 		}
 		pctx.setCurrent(plugin.Name(), InvocationPhaseRequest, policy)
 		pctx.dispatched = append(pctx.dispatched, i)
+		if p.debugLogInput {
+			logPluginInput(pctx, plugin.Name())
+		}
 		action := plugin.OnRequest(ctx, pctx)
 		pctx.clearCurrent()
 		if action.Type == Reject {
@@ -292,6 +314,39 @@ func markShadowAndLog(pctx *Context, pluginName string, phase InvocationPhase, a
 		"status", status,
 		"code", action.Violation.Code,
 		"reason", action.Violation.Reason)
+}
+
+// logPluginInput emits a Debug-level snapshot of pctx immediately before
+// plugin's OnRequest runs — everything accumulated on the shared Context so
+// far (there is no separate per-plugin input value; every plugin reads and
+// mutates the same pctx). Gated by Pipeline.debugLogInput — see
+// WithDebugPluginInput for the security caveats; this is dev /
+// incident-response tooling, not something to run by default.
+func logPluginInput(pctx *Context, name string) {
+	attrs := []any{
+		"plugin", name,
+		"direction", pctx.Direction.String(),
+		"method", pctx.Method,
+		"path", pctx.Path,
+		"host", pctx.Host,
+		"headers", redact.Headers(pctx.Headers),
+	}
+	if pctx.Identity != nil {
+		attrs = append(attrs, "identity", map[string]any{
+			"subject":   pctx.Identity.Subject(),
+			"client_id": pctx.Identity.ClientID(),
+			"scopes":    pctx.Identity.Scopes(),
+		})
+		if cc, ok := pctx.Identity.(contracts.ClaimsCarrier); ok {
+			attrs = append(attrs, "identity_claims", map[string]any{
+				"issuer":      cc.Issuer(),
+				"audience":    cc.Audience(),
+				"auth_method": cc.AuthMethod(),
+				"claims":      cc.Claims(),
+			})
+		}
+	}
+	slog.Debug("pipeline: plugin input", attrs...)
 }
 
 // stampPluginName annotates a reject action with the plugin that produced

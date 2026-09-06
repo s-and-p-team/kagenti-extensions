@@ -104,6 +104,23 @@ Mint requires `pctx.Shared` to be wired by the listener; if it is nil
 when `placeholder_mode` is on, the plugin fails fast at init (a deploy
 error) rather than silently forwarding the real token.
 
+### `jwt-validation`: `debug_log_claims` (optional, off by default)
+
+- **`debug_log_claims`** — bool, default `false`. Logs the token's full
+  decoded claim set (registered claims + `Extra` — everything the IdP put in
+  it: `sub`, `azp`, `scope`, `realm_access`, `preferred_username`, `email`,
+  etc.) at Debug level on every `Verify` call, run through `redact.JSON` as
+  defense-in-depth. Fires on **both** the success path and the
+  audience-mismatch failure path (the claims are built before that check),
+  so a rejected token's actual contents are visible too — that's usually
+  the exact moment you need this.
+
+  Dev / incident-response tool only. **Never enable on a shared or
+  production cluster** — the logged claims are PII. Hot-reloadable like any
+  other plugin config field. See also `debug.log_plugin_input` (a top-level
+  config field, not per-plugin) for logging what every plugin in the
+  pipeline saw at the moment it ran — [CLAUDE.md's Gotchas #12](../CLAUDE.md).
+
 ## `on_error` policy
 
 > **Naming caveat.** Despite the name, `on_error` controls how the

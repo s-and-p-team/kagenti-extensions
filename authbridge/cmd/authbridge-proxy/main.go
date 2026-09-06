@@ -229,11 +229,16 @@ func main() {
 			return nil, nil, nil, err
 		}
 		config.WarnEmptyPipelines(c, slog.Default())
-		in, err := plugins.BuildWithSPIFFE(c.Pipeline.Inbound.Plugins, provider)
+		// c.Debug is opt-in, off-by-default diagnostic logging (raw token
+		// claims in jwt-validation's own config, per-plugin pipeline input
+		// here) — see authlib/config's DebugConfig doc comment for the
+		// "never on a shared/production cluster" caveat.
+		debugPluginInput := pipeline.WithDebugPluginInput(c.Debug != nil && c.Debug.LogPluginInput)
+		in, err := plugins.BuildWithSPIFFE(c.Pipeline.Inbound.Plugins, provider, debugPluginInput)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("inbound: %w", err)
 		}
-		out, err := plugins.BuildWithSPIFFE(c.Pipeline.Outbound.Plugins, provider)
+		out, err := plugins.BuildWithSPIFFE(c.Pipeline.Outbound.Plugins, provider, debugPluginInput)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("outbound: %w", err)
 		}
