@@ -24,6 +24,15 @@ summary line, never gating (spec: under-grant threshold TBD, deferred).
 Run (needs LLM_BASE_URL/LLM_MODEL/LLM_API_KEY exported; no Keycloak/opa needed):
     .venv/bin/pytest eval/test_policy_pipeline_correctness_prb.py \
         -m eval_correctness_prb -v -s
+
+The 8 scenarios are fully independent (separate synthetic Role/Scope, separate
+AIAC_POLICY_FILE), so they can run concurrently for a near-linear wall-clock speedup —
+``orchestrate_prb()`` makes ~5-8 sequential LLM calls per scenario, so the suite is otherwise
+dominated by LLM round-trip latency. Requires ``pip install pytest-xdist`` first (not a repo
+dependency, opt-in for local speed):
+    .venv/bin/pip install pytest-xdist
+    .venv/bin/pytest eval/test_policy_pipeline_correctness_prb.py \
+        -m eval_correctness_prb -n 8 -v -s
 """
 
 from __future__ import annotations
@@ -70,18 +79,22 @@ def test_prb_correctness(scenario_name: str, monkeypatch: pytest.MonkeyPatch, re
     expected = truth(scenario)
     score = score_scenario(scenario_name, granted, denied, expected)
 
+    over_grants = {g: sorted(p) for g, p in score.over_grants.items()}
+    under_grants = {g: sorted(p) for g, p in score.under_grants.items()}
+    incorrectly_denied = {g: sorted(p) for g, p in score.incorrectly_denied.items()}
+
     record_property("precision", score.precision)
     record_property("recall", score.recall)
     record_property("denial_precision", score.denial_precision)
-    record_property("over_grants", {g: sorted(p) for g, p in score.over_grants.items()})
-    record_property("under_grants", {g: sorted(p) for g, p in score.under_grants.items()})
-    record_property("incorrectly_denied", {g: sorted(p) for g, p in score.incorrectly_denied.items()})
+    record_property("over_grants", over_grants)
+    record_property("under_grants", under_grants)
+    record_property("incorrectly_denied", incorrectly_denied)
     print(
         f"[correctness] {scenario_name}: precision={score.precision:.3f} "
-        f"recall={score.recall:.3f} denial_precision={score.denial_precision:.3f}"
+        f"recall={score.recall:.3f} denial_precision={score.denial_precision:.3f}\n"
+        f"  over_grants={over_grants or '{}'}\n"
+        f"  under_grants={under_grants or '{}'}\n"
+        f"  incorrectly_denied={incorrectly_denied or '{}'}"
     )
 
-    assert score.passed, (
-        f"PRB over-granted for scenario '{scenario_name}' — zero-tolerance gate: "
-        f"{ {g: sorted(p) for g, p in score.over_grants.items()} }"
-    )
+    assert score.passed, f"PRB over-granted for scenario '{scenario_name}' — zero-tolerance gate: {over_grants}"

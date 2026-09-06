@@ -215,6 +215,19 @@ which applies here unchanged.
 Like every sibling suite, `require_env("LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY")` is the first
 line of the parametrized test function, raising `SystemExit(2)` if any is unset/empty.
 
+## Test report
+
+Widens `eval/conftest.py`'s Markdown report described in
+[policy-eval-scenarios.md § Test report](policy-eval-scenarios.md#test-report) to also collect
+`eval_correctness_prb`-marked tests (`eval/conftest.py`'s `MARKERS` set now covers all four
+markers). Unlike `eval_consistency`/`eval_robustness` (which fall through to that report's generic
+docstring + crash-message rendering), `test_prb_correctness` gets its **own** render branch: each
+entry shows precision, recall, and denial precision, plus the over-grants/under-grants/
+incorrectly-denied pair breakdown per gate — always, pass or fail, since the tracked-but-non-gating
+under-grant/incorrect-denial detail (the whole point of this suite over a plain grant-set-equality
+check) is otherwise invisible on a passing run. The same detail is also printed unconditionally to
+stdout per scenario (`-s`) for live inspection without waiting on the written report file.
+
 ## Relationship to other integration tests
 
 This is **one** integration-test spec among several indexed by the master PRD
@@ -233,8 +246,9 @@ This is **one** integration-test spec among several indexed by the master PRD
 
 ## Out of Scope
 
-- **Wiring into `eval/conftest.py`'s Markdown report or a committed trend log.** Deferred to
-  #2091.
+- **A committed trend log** (tracking precision/recall/denial-precision across runs over time, as
+  opposed to the per-run Markdown report — see [Test report](#test-report), which **is** wired
+  in). Deferred to #2091.
 - **End-to-end (Keycloak+OPA) correctness scoring.** Deferred to #2090 — `correctness_scorer.py`
   is designed to be reusable there; the wiring itself is not this ticket's scope.
 - **An under-grant tolerance threshold.** Per the originating spec, still TBD — under-grants are
